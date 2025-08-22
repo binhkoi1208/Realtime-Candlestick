@@ -15,7 +15,7 @@ api_key = os.getenv("api_key")
 # Set up variables
 current_bucket = None
 candle = {}
-interval = 10
+interval = 60
 candles_list = []
 
 # Websocket Func
@@ -43,11 +43,11 @@ def on_message(ws, message):
             }
 
             current_bucket = bucket
-            candles_list.append(candle)
+            candles_list.append(candle.copy())
         
         elif current_bucket != bucket:
             current_bucket = bucket
-            candles_list.append(candle)
+            candles_list.append(candle.copy())
             if len(candles_list) > 50:
                 candles_list.pop(0)
 
@@ -81,15 +81,17 @@ ws = websocket.WebSocketApp(f"wss://ws.finnhub.io?token={api_key}", on_open=on_o
 # Create Plotly
 df = pd.DataFrame(candles_list, columns=['Time', 'Open', 'High', 'Low', 'Close', 'Volume'])
 fig = go.Figure(data=[go.Candlestick(
-
-    x=df["Time"],
+    x=pd.to_datetime(df["Time"], unit='s'),
     open=df["Open"],
     high=df["High"],
     low=df["Low"],
     close=df["Close"],
     increasing_line_color="green",
-    decreasing_line_color="red"
+    decreasing_line_color="red",
 )])
+fig.update_xaxes(type="date")
+fig.update_traces(whiskerwidth=0.2, increasing_line_width=1.5, decreasing_line_width=1.5)
+
 
 # Create Layout for Candlesticks
 app = Dash(__name__)
@@ -123,10 +125,13 @@ def update_graph(n):
         low=df["Low"],
         close=df["Close"],
         increasing_line_color="green",
-        decreasing_line_color="red"
+        decreasing_line_color="red",
     )])
 
     fig.update_layout(xaxis_rangeslider_visible=False)
+    fig.update_xaxes(type="date")
+    fig.update_traces(whiskerwidth=0.2, increasing_line_width=1.5, decreasing_line_width=1.5)
+
     return fig
 
 # Run Websocket 
