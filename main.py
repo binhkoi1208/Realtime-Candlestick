@@ -2,14 +2,23 @@ import os
 from dotenv import load_dotenv
 import websocket, json
 import datetime
+import plotly.graph_objects as go
+import pandas as pd
+from dash import Dash, dcc, html
+from dash.dependencies import Output, Input
+import threading
 
+# Get ENV
 load_dotenv()
 api_key = os.getenv("api_key")
 
+# Set up variables
 current_bucket = None
 candle = {}
 interval = 10
+candles_list = []
 
+# Websocket Func
 def on_message(ws, message):
     global current_bucket, candle
     data = json.loads(message)
@@ -34,10 +43,13 @@ def on_message(ws, message):
             }
 
             current_bucket = bucket
+            candles_list.append(candle)
         
         elif current_bucket != bucket:
-            print_candle(candle)
             current_bucket = bucket
+            candles_list.append(candle)
+            if len(candles_list) > 50:
+                candles_list.pop(0)
 
             candle = {
                 "High": price,
@@ -54,14 +66,9 @@ def on_message(ws, message):
             candle["Close"] = price
             candle["Volume"] += volume
 
-def print_candle(candle):
-    candle_time = datetime.datetime.fromtimestamp(candle["Time"]).strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{candle_time}] O: {candle['Open']:.2f}; C: {candle['Close']:.2f}; H: {candle['High']:.2f}; L: {candle['Low']:.2f}; V: {candle['Volume']:.2f}")
-
-
 def on_open(ws):
     print("Connected to Finnhub...")
-    ws.send(json.dumps({"type": "subscribe", "symbol": "AAPL"}))
+    ws.send(json.dumps({"type": "subscribe", "symbol": "BINANCE:BTCUSDT"}))
 
 def on_error(ws, error):
     print("ERROR: ", error)
@@ -71,11 +78,68 @@ def on_close(ws, close_status_code, close_msg):
 
 ws = websocket.WebSocketApp(f"wss://ws.finnhub.io?token={api_key}", on_open=on_open, on_close=on_close, on_message=on_message, on_error=on_error)
 
-try:
-    ws.run_forever()
-except KeyboardInterrupt:
-    ws.close()
+# Create Plotly
+df = pd.DataFrame(candles_list, columns=['Time', 'Open', 'High', 'Low', 'Close', 'Volume'])
+fig = go.Figure(data=[go.Candlestick(
 
+    x=df["Time"],
+    open=df["Open"],
+    high=df["High"],
+    low=df["Low"],
+    close=df["Close"],
+    increasing_line_color="green",
+    decreasing_line_color="red"
+)])
 
+# Create Layout for Candlesticks
+app = Dash(__name__)
+app.layout = html.Div([
+    html.H1("Realtime Candlesticks"),
+    dcc.Graph(id="candlestick-graph"),
+    dcc.Interval(
+        id="interval-component",
+        interval=1*1000,
+        n_intervals=0
+    )
+])
 
+# Create Callback
+@app.callback(
+    Output('candlestick-graph', 'figure'),
+    Input('interval-component', 'n_intervals')
+)
 
+# Update Graph Func
+def update_graph(n):
+    if not candles_list:
+        return go.Figure()
+    
+    df = pd.DataFrame(candles_list)
+
+    fig = go.Figure(data=[go.Candlestick(
+        x=pd.to_datetime(df["Time"], unit='s'),
+        open=df["Open"],
+        high=df["High"],
+        low=df["Low"],
+        close=df["Close"],
+        increasing_line_color="green",
+        decreasing_line_color="red"
+    )])
+
+    fig.update_layout(xaxis_rangeslider_visible=False)
+    return fig
+
+# Run Websocket 
+def run_websocket(ws):
+    try:
+        ws.run_forever()
+    except KeyboardInterrupt:
+        ws.close()
+
+# Main: Websocket on Threads and Dash on mainstream
+if __name__ == "__main__":
+    ws_thread = threading.Thread(target=run_websocket, args=(ws,))
+    ws_thread.daemon = True
+    ws_thread.start()
+
+    app.run(debug=True)
